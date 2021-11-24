@@ -1,14 +1,16 @@
-package main
+package resumefile
 
 import (
+	"bytes"
+	"crypto/md5"
 	"fmt"
 	"io"
-	"log"
+	"io/ioutil"
 	"os"
 	"syscall"
 	"time"
 
-	indextree "github.com/474420502/structure/tree/itree"
+	"github.com/474420502/structure/tree/avl"
 )
 
 type ResumeFileState int
@@ -48,37 +50,37 @@ func (s ResumeFileState) String() string {
 type ResumeFile struct {
 	File     *os.File
 	Size     uint64 // 文件总Size
-	Data     *indextree.Tree
+	Data     *avl.Tree
 	CreateAt time.Time
 	MD5      []byte
 }
 
-func (rfile *ResumeFile) Put(pr PartRange, data []byte) ResumeFileState {
+func (rfile *ResumeFile) Put(pr PartRange, data []byte) (ResumeFileState, error) {
 	ppr := &pr
 	var state ResumeFileState = StateInsert
 	if ppr.End > rfile.Size { // 超过最大值, 返回错误
-		return StateErrorOutOfSize
+		return StateErrorOutOfSize, fmt.Errorf("PartRange End > Size of resumefile")
 	}
 
+	// 文件定位然后写入数据
 	_, err := rfile.File.Seek(int64(ppr.Start), io.SeekStart)
 	if err != nil {
-		log.Println(err)
-		return StateErrorSeek
+		return StateErrorSeek, err
 	}
 	_, err = rfile.File.Write(data)
 	if err != nil {
-		log.Println(err)
-		return StateErrorFileWrite
+		return StateErrorFileWrite, err
 	}
+	// 同步文件数据
 	err = rfile.File.Sync()
 	if err != nil {
-		log.Println(err)
-		return StateErrorFileSync
+		return StateErrorFileSync, err
 	}
 
+	// 循环合并 数据块, 使块可以通过tree快速检索.
 	for {
 
-		if p := rfile.Data.Remove(ppr); p != nil {
+		if p, ok := rfile.Data.Remove(ppr); ok {
 			pdOld := p.(*PartRange)
 			ppr.Merge(pdOld)
 			if state != StateMegre {
@@ -88,53 +90,68 @@ func (rfile *ResumeFile) Put(pr PartRange, data []byte) ResumeFileState {
 			rfile.Data.Set(ppr, ppr)
 			break
 		}
-
 	}
 
 	if rfile.Data.Size() == 1 {
-		_, v := rfile.Data.Index(0)
-		ppr = v.(*PartRange)
+		var ppr *PartRange // ppr必然不会nil
+		rfile.Data.Traverse(func(k, v interface{}) bool {
+			ppr = v.(*PartRange)
+			return false
+		})
 		if ppr.End-ppr.Start == rfile.Size {
 			state = StateCompleted
 		}
 	}
-	return state
+	return state, nil
 }
 
-// PartRange SubdividedFile的Data里的块
-type PartRange struct {
-	Start uint64
-	End   uint64
+func (rfile *ResumeFile) Close() error {
+	return rfile.File.Close()
 }
 
-func (pd *PartRange) String() string {
-	return fmt.Sprintf("[%d-%d]", pd.Start, pd.End)
+func (rfile *ResumeFile) SetVaildMD5(md5data []byte) {
+	rfile.MD5 = md5data
 }
 
-// Merge 合并其他范围
-func (pd *PartRange) Merge(other *PartRange) {
-	if pd.Start > other.Start {
-		pd.Start = other.Start
+func (rfile *ResumeFile) VaildMD5() bool {
+	return bytes.Equal(rfile.GetCurrentMD5(), rfile.MD5)
+}
+
+func (rfile *ResumeFile) Lacking() []PartRange {
+	var result []PartRange
+
+	var lackStart uint64 = 0
+	iter := rfile.Data.Iterator()
+	iter.SeekToFirst()
+	for iter.Vaild() {
+		pr := iter.Value().(*PartRange)
+		start := pr.Start - lackStart
+		if start <= 0 {
+			lackStart = pr.End
+			continue
+		}
+		result = append(result, PartRange{Start: lackStart, End: pr.Start})
+		lackStart = pr.End
+		iter.Next()
 	}
 
-	if pd.End < other.End {
-		pd.End = other.End
+	if lackStart < rfile.Size {
+		result = append(result, PartRange{Start: lackStart, End: rfile.Size})
 	}
+
+	return result
 }
 
-func compare(k1, k2 interface{}) int {
-	d1 := k1.(*PartRange)
-	d2 := k2.(*PartRange)
-	if d1.End < d2.Start {
-		return -1
-	} else if d1.Start > d2.End {
-		return 1
-	} else {
-		return 0
+func (rfile *ResumeFile) GetCurrentMD5() []byte {
+	rfile.File.Seek(0, 0)
+	data, err := ioutil.ReadAll(rfile.File)
+	if err != nil {
+		panic(err)
 	}
+	return md5.New().Sum(data)
 }
 
-func NewSubdividedFile(filepath string, size uint64) *ResumeFile {
+func NewResumeFile(filepath string, size uint64) *ResumeFile {
 	var f *os.File
 	_, err := os.Stat(filepath)
 	if os.IsNotExist(err) {
@@ -155,8 +172,5 @@ func NewSubdividedFile(filepath string, size uint64) *ResumeFile {
 
 	//
 
-	return &ResumeFile{File: f, Size: size, Data: indextree.New(compare)}
-}
-
-type UploadPart struct {
+	return &ResumeFile{File: f, Size: size, Data: avl.New(partRangeCompare)}
 }
