@@ -5,7 +5,6 @@ import (
 	"crypto/md5"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"syscall"
 	"time"
@@ -51,13 +50,15 @@ func (s ResumeFileState) String() string {
 
 // ResumeFile 细分的文件数据结构
 type ResumeFile struct {
-	File     *os.File
-	Size     uint64 // 文件总Size
-	Data     *avl.Tree
-	CreateAt time.Time
-	MD5      []byte
+	FilePath     string
+	File         *os.File
+	Size         uint64 // 文件总Size
+	Data         *avl.Tree
+	MD5          []byte
+	LackingLimit int // 限制GetLacking的数量
 }
 
+// Put 把分块数据填充文件
 func (rfile *ResumeFile) Put(pr PartRange, data []byte) (ResumeFileState, error) {
 	ppr := &pr
 	var state ResumeFileState = StateInsert
@@ -112,19 +113,24 @@ func (rfile *ResumeFile) Put(pr PartRange, data []byte) (ResumeFileState, error)
 	return state, nil
 }
 
+// Close 关闭 rfile相关文件
 func (rfile *ResumeFile) Close() error {
+	rfile.Data = nil
 	return rfile.File.Close()
 }
 
+// SetVaildMD5 设置需要校验的md5
 func (rfile *ResumeFile) SetVaildMD5(md5data []byte) {
 	rfile.MD5 = md5data
 }
 
+// VaildMD5 校验md5
 func (rfile *ResumeFile) VaildMD5() bool {
 	return bytes.Equal(rfile.GetCurrentMD5(), rfile.MD5)
 }
 
-func (rfile *ResumeFile) Lacking() []PartRange {
+// GetLacking 获取缺少的范围
+func (rfile *ResumeFile) GetLacking() []PartRange {
 	var result []PartRange
 
 	var lackStart uint64 = 0
@@ -138,8 +144,10 @@ func (rfile *ResumeFile) Lacking() []PartRange {
 			continue
 		}
 		result = append(result, PartRange{Start: lackStart, End: pr.Start})
+		if rfile.LackingLimit > 0 && len(result) >= rfile.LackingLimit {
+			return result
+		}
 		lackStart = pr.End
-
 	}
 
 	if lackStart < rfile.Size {
@@ -149,17 +157,35 @@ func (rfile *ResumeFile) Lacking() []PartRange {
 	return result
 }
 
+// GetCurrentMD5 获取当前已经填充的文件file
 func (rfile *ResumeFile) GetCurrentMD5() []byte {
 	rfile.File.Seek(0, 0)
-	data, err := ioutil.ReadAll(rfile.File)
+	md5hash := md5.New()
+	_, err := io.Copy(md5hash, rfile.File)
+	// data, err := ioutil.ReadAll(rfile.File)
 	if err != nil {
 		panic(err)
 	}
 
-	return md5.New().Sum(data)
+	return md5hash.Sum(nil)
 }
 
+// GetModTime 获取文件的修改时间
+func (rfile *ResumeFile) GetModTime() time.Time {
+	info, err := os.Stat(rfile.FilePath)
+	if os.IsNotExist(err) {
+		panic(err)
+	}
+	return info.ModTime()
+}
+
+// NewResumeFile 创建一个可填充, 断点续传的文件
 func NewResumeFile(filepath string, size uint64) *ResumeFile {
+
+	if size == 0 {
+		panic(fmt.Errorf("ResumeFile Size is Zero"))
+	}
+
 	var f *os.File
 	_, err := os.Stat(filepath)
 	if os.IsNotExist(err) {
@@ -180,5 +206,5 @@ func NewResumeFile(filepath string, size uint64) *ResumeFile {
 
 	//
 
-	return &ResumeFile{File: f, Size: size, Data: avl.New(partRangeCompare)}
+	return &ResumeFile{File: f, Size: size, Data: avl.New(partRangeCompare), FilePath: filepath}
 }

@@ -2,7 +2,6 @@ package resumefile
 
 import (
 	"bytes"
-	"crypto/md5"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -63,6 +62,7 @@ func TestCase1(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
+
 	tfdata, err := ioutil.ReadAll(tf)
 	if err != nil {
 		panic(err)
@@ -110,8 +110,9 @@ func TestCase1(t *testing.T) {
 		time.Sleep(time.Millisecond * 10)
 	}
 
-	if !bytes.Equal(file.GetCurrentMD5(), md5.New().Sum(tfdata)) {
+	if !bytes.Equal(file.GetCurrentMD5(), GetFileMD5Sum("./go.mod")) {
 		t.Error("md5 is not equal")
+		t.Errorf("%x\n%x", file.GetCurrentMD5(), GetFileMD5Sum("./go.mod"))
 	}
 
 }
@@ -154,7 +155,7 @@ func TestCase2(t *testing.T) {
 		time.Sleep(time.Millisecond * 10)
 	}
 
-	if !bytes.Equal(file.GetCurrentMD5(), md5.New().Sum(tfdata)) {
+	if !bytes.Equal(file.GetCurrentMD5(), GetFileMD5Sum("./go.mod")) {
 		t.Error("md5 is not equal")
 	}
 
@@ -179,9 +180,11 @@ func TestCase3(t *testing.T) {
 
 	rfile := NewResumeFile(testfile, uint64(len(tfdata)))
 
-	if !bytes.Equal(rfile.GetCurrentMD5(), md5.New().Sum(tfdata)) {
+	if !bytes.Equal(rfile.GetCurrentMD5(), GetFileMD5Sum("./go.mod")) {
 		t.Error("md5 is not equal")
 	}
+
+	log.Println(rfile.GetModTime())
 }
 
 func TestCaseLacking(t *testing.T) {
@@ -190,10 +193,10 @@ func TestCaseLacking(t *testing.T) {
 	tfsize := len(tfdata)
 
 	file := NewResumeFile(testfile, uint64(tfsize))
-	if len(file.Lacking()) != 1 {
+	if len(file.GetLacking()) != 1 {
 		panic("")
 	}
-	if pr := file.Lacking()[0]; pr.Start != 0 && pr.End != uint64(tfsize) {
+	if pr := file.GetLacking()[0]; pr.Start != 0 && pr.End != uint64(tfsize) {
 		panic("")
 	}
 
@@ -205,9 +208,10 @@ func TestCaseLacking(t *testing.T) {
 		panic("")
 	}
 
-	if len(file.Lacking()) != 0 {
-		log.Panic(file.Lacking())
+	if len(file.GetLacking()) != 0 {
+		log.Panic(file.GetLacking())
 	}
+
 }
 
 func TestCase4(t *testing.T) {
@@ -224,12 +228,11 @@ func TestCase4(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	md5hash := md5.New().Sum(tfdata)
 
 	tfsize := len(tfdata)
 	file := NewResumeFile(testfile, uint64(tfsize))
 	defer file.Close()
-	file.SetVaildMD5(md5hash)
+	file.SetVaildMD5(GetFileMD5Sum("go.mod"))
 
 	var start, end int
 	for {
@@ -256,7 +259,7 @@ func TestCase4(t *testing.T) {
 	}
 
 	// log.Println(file.Data.Values())
-	for _, pr := range file.Lacking() {
+	for _, pr := range file.GetLacking() {
 		_, err := file.Put(pr, tfdata[pr.Start:pr.End])
 		if err != nil {
 			t.Error(err)
