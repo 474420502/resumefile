@@ -3,7 +3,9 @@ package resumefile
 import (
 	"bytes"
 	"crypto/md5"
+	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"testing"
 	"time"
@@ -11,8 +13,49 @@ import (
 	"github.com/474420502/random"
 )
 
+func init() {
+	info, err := os.Stat("./tests")
+	if os.IsNotExist(err) {
+		err = os.Mkdir("./tests", 0774)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		if !info.IsDir() {
+			panic(fmt.Errorf("tests is exists. and not dir"))
+		}
+	}
+}
+
+func getTestFileData() []byte {
+	tf, err := os.Open("./go.mod")
+	if err != nil {
+		panic(err)
+	}
+	tfdata, err := ioutil.ReadAll(tf)
+	if err != nil {
+		panic(err)
+	}
+	return tfdata
+}
+
+func copyFileTo(src string, dst string) error {
+	// Read all content of src to data
+	data, err := ioutil.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	// Write data to dst
+	err = ioutil.WriteFile(dst, data, 0644)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func TestCase1(t *testing.T) {
-	var testfile = "testfile1"
+	var testfile = "./tests/testfile1"
 
 	rand := random.New()
 	os.Remove(testfile)
@@ -74,7 +117,7 @@ func TestCase1(t *testing.T) {
 }
 
 func TestCase2(t *testing.T) {
-	var testfile = "testfile2"
+	var testfile = "./tests/testfile2"
 
 	rand := random.New()
 	os.Remove(testfile)
@@ -118,7 +161,7 @@ func TestCase2(t *testing.T) {
 }
 
 func TestCase3(t *testing.T) {
-	var testfile = "testfile3"
+	var testfile = "./tests/testfile3"
 
 	_, err := os.Stat(testfile)
 	if os.IsNotExist(err) {
@@ -141,11 +184,38 @@ func TestCase3(t *testing.T) {
 	}
 }
 
+func TestCaseLacking(t *testing.T) {
+	var testfile = "./tests/testfile_lacking"
+	tfdata := getTestFileData()
+	tfsize := len(tfdata)
+
+	file := NewResumeFile(testfile, uint64(tfsize))
+	if len(file.Lacking()) != 1 {
+		panic("")
+	}
+	if pr := file.Lacking()[0]; pr.Start != 0 && pr.End != uint64(tfsize) {
+		panic("")
+	}
+
+	s, err := file.Put(PartRange{Start: 0, End: uint64(tfsize)}, tfdata)
+	if err != nil {
+		panic("")
+	}
+	if s != StateCompleted {
+		panic("")
+	}
+
+	if len(file.Lacking()) != 0 {
+		log.Panic(file.Lacking())
+	}
+}
+
 func TestCase4(t *testing.T) {
-	var testfile = "testfile4"
+	var testfile = "./tests/testfile4"
 
 	rand := random.New()
 	os.Remove(testfile)
+
 	tf, err := os.Open("./go.mod")
 	if err != nil {
 		panic(err)

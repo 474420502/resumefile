@@ -16,6 +16,7 @@ import (
 type ResumeFileState int
 
 const (
+	StateErrorMD5       ResumeFileState = -5 // MD5校验错误
 	StateErrorFileSync  ResumeFileState = -4 // 文件同步写入错误
 	StateErrorFileWrite ResumeFileState = -3 // 文件写入错误
 	StateErrorSeek      ResumeFileState = -2 // Seek错误
@@ -27,6 +28,8 @@ const (
 
 func (s ResumeFileState) String() string {
 	switch s {
+	case StateErrorMD5:
+		return "StateErrorMD5"
 	case StateErrorFileSync:
 		return "StateErrorFileSync"
 	case StateErrorFileWrite:
@@ -79,7 +82,6 @@ func (rfile *ResumeFile) Put(pr PartRange, data []byte) (ResumeFileState, error)
 
 	// 循环合并 数据块, 使块可以通过tree快速检索.
 	for {
-
 		if p, ok := rfile.Data.Remove(ppr); ok {
 			pdOld := p.(*PartRange)
 			ppr.Merge(pdOld)
@@ -99,6 +101,11 @@ func (rfile *ResumeFile) Put(pr PartRange, data []byte) (ResumeFileState, error)
 			return false
 		})
 		if ppr.End-ppr.Start == rfile.Size {
+			if len(rfile.MD5) != 0 {
+				if !rfile.VaildMD5() {
+					return StateErrorMD5, fmt.Errorf("want md5 %x != ResumeFile md5 %x", rfile.MD5, rfile.GetCurrentMD5())
+				}
+			}
 			state = StateCompleted
 		}
 	}
@@ -122,8 +129,8 @@ func (rfile *ResumeFile) Lacking() []PartRange {
 
 	var lackStart uint64 = 0
 	iter := rfile.Data.Iterator()
-	iter.SeekToFirst()
-	for iter.Vaild() {
+
+	for iter.SeekToFirst(); iter.Vaild(); iter.Next() {
 		pr := iter.Value().(*PartRange)
 		start := pr.Start - lackStart
 		if start <= 0 {
@@ -132,7 +139,7 @@ func (rfile *ResumeFile) Lacking() []PartRange {
 		}
 		result = append(result, PartRange{Start: lackStart, End: pr.Start})
 		lackStart = pr.End
-		iter.Next()
+
 	}
 
 	if lackStart < rfile.Size {
@@ -148,6 +155,7 @@ func (rfile *ResumeFile) GetCurrentMD5() []byte {
 	if err != nil {
 		panic(err)
 	}
+
 	return md5.New().Sum(data)
 }
 
