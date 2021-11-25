@@ -168,6 +168,11 @@ func (rfile *ResumeFile) SetVaildMD5(md5data []byte) {
 	rfile.MD5 = md5data
 }
 
+// GetVaildMD5 获取设置需要校验的md5
+func (rfile *ResumeFile) GetVaildMD5() []byte {
+	return rfile.MD5
+}
+
 // VaildMD5 校验md5
 func (rfile *ResumeFile) VaildMD5() bool {
 	return bytes.Equal(rfile.GetCurrentMD5(), rfile.MD5)
