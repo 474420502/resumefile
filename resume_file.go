@@ -12,20 +12,20 @@ import (
 	"github.com/474420502/structure/tree/avl"
 )
 
-type ResumeFileState int
+type State int
 
 const (
-	StateErrorMD5       ResumeFileState = -5 // MD5校验错误
-	StateErrorFileSync  ResumeFileState = -4 // 文件同步写入错误
-	StateErrorFileWrite ResumeFileState = -3 // 文件写入错误
-	StateErrorSeek      ResumeFileState = -2 // Seek错误
-	StateErrorOutOfSize ResumeFileState = -1 // 插入错误,超出文件最大范围
-	StateCompleted      ResumeFileState = 0  // 完成
-	StateMegre          ResumeFileState = 1  // 插入数据与前数据合并
-	StateInsert         ResumeFileState = 2  // 插入数据并没有与其他块数据交接
+	StateErrorMD5       State = -5 // MD5校验错误
+	StateErrorFileSync  State = -4 // 文件同步写入错误
+	StateErrorFileWrite State = -3 // 文件写入错误
+	StateErrorSeek      State = -2 // Seek错误
+	StateErrorOutOfSize State = -1 // 插入错误,超出文件最大范围
+	StateCompleted      State = 0  // 完成
+	StateMegre          State = 1  // 插入数据与前数据合并
+	StateInsert         State = 2  // 插入数据并没有与其他块数据交接
 )
 
-func (s ResumeFileState) String() string {
+func (s State) String() string {
 	switch s {
 	case StateErrorMD5:
 		return "StateErrorMD5"
@@ -58,10 +58,40 @@ type ResumeFile struct {
 	LackingLimit int // 限制GetLacking的数量
 }
 
+// NewResumeFile 创建一个可填充, 断点续传的文件
+func NewResumeFile(filepath string, size uint64) *ResumeFile {
+
+	if size == 0 {
+		panic(fmt.Errorf("ResumeFile Size is Zero"))
+	}
+
+	var f *os.File
+	_, err := os.Stat(filepath)
+	if os.IsNotExist(err) {
+		f, err = os.OpenFile(filepath, os.O_CREATE|os.O_RDWR, 0664)
+		if err != nil {
+			panic(err)
+		}
+		err = syscall.Fallocate(int(f.Fd()), 0, 0, int64(size))
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		f, err = os.OpenFile(filepath, os.O_RDWR, 0664)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	//
+
+	return &ResumeFile{File: f, Size: size, Data: avl.New(partRangeCompare), FilePath: filepath}
+}
+
 // Put 把分块数据填充文件
-func (rfile *ResumeFile) Put(pr PartRange, data []byte) (ResumeFileState, error) {
+func (rfile *ResumeFile) Put(pr PartRange, data []byte) (State, error) {
 	ppr := &pr
-	var state ResumeFileState = StateInsert
+	var state State = StateInsert
 	if ppr.End > rfile.Size { // 超过最大值, 返回错误
 		return StateErrorOutOfSize, fmt.Errorf("PartRange End > Size of resumefile")
 	}
@@ -117,6 +147,20 @@ func (rfile *ResumeFile) Put(pr PartRange, data []byte) (ResumeFileState, error)
 func (rfile *ResumeFile) Close() error {
 	rfile.Data = nil
 	return rfile.File.Close()
+}
+
+// Remove 关闭rfile相关文件, 移除文件
+func (rfile *ResumeFile) Remove() error {
+	var err error
+	err = rfile.Close()
+	if err != nil {
+		return err
+	}
+	err = os.Remove(rfile.FilePath)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // SetVaildMD5 设置需要校验的md5
@@ -177,34 +221,4 @@ func (rfile *ResumeFile) GetModTime() time.Time {
 		panic(err)
 	}
 	return info.ModTime()
-}
-
-// NewResumeFile 创建一个可填充, 断点续传的文件
-func NewResumeFile(filepath string, size uint64) *ResumeFile {
-
-	if size == 0 {
-		panic(fmt.Errorf("ResumeFile Size is Zero"))
-	}
-
-	var f *os.File
-	_, err := os.Stat(filepath)
-	if os.IsNotExist(err) {
-		f, err = os.OpenFile(filepath, os.O_CREATE|os.O_RDWR, 0664)
-		if err != nil {
-			panic(err)
-		}
-		err = syscall.Fallocate(int(f.Fd()), 0, 0, int64(size))
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		f, err = os.OpenFile(filepath, os.O_RDWR, 0664)
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	//
-
-	return &ResumeFile{File: f, Size: size, Data: avl.New(partRangeCompare), FilePath: filepath}
 }
