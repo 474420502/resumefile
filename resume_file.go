@@ -5,6 +5,8 @@ import (
 	"crypto/md5"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"log"
 	"os"
 	"syscall"
 	"time"
@@ -15,6 +17,7 @@ import (
 type State int
 
 const (
+	StateErrorWal       State = -6 // Wal写入错误
 	StateErrorMD5       State = -5 // MD5校验错误
 	StateErrorFileSync  State = -4 // 文件同步写入错误
 	StateErrorFileWrite State = -3 // 文件写入错误
@@ -27,6 +30,8 @@ const (
 
 func (s State) String() string {
 	switch s {
+	case StateErrorWal:
+		return "StateErrorWal"
 	case StateErrorMD5:
 		return "StateErrorMD5"
 	case StateErrorFileSync:
@@ -54,38 +59,118 @@ type ResumeFile struct {
 	File         *os.File
 	Size         uint64 // 文件总Size
 	Data         *avl.Tree
+	Wal          *os.File
 	MD5          []byte
 	LackingLimit int // 限制GetLacking的数量
 }
 
-// NewResumeFile 创建一个可填充, 断点续传的文件
-func NewResumeFile(filepath string, size uint64) *ResumeFile {
+func NewResumeFile(filepath string) *ResumeFile {
+	return &ResumeFile{
+		FilePath: filepath,
+		Data:     avl.New(partRangeCompare),
+	}
+}
 
+// Create 创建ResumeFile文件
+func (rfile *ResumeFile) Create(md5bytes []byte, size uint64) error {
 	if size == 0 {
 		panic(fmt.Errorf("ResumeFile Size is Zero"))
 	}
 
-	var f *os.File
-	_, err := os.Stat(filepath)
-	if os.IsNotExist(err) {
-		f, err = os.OpenFile(filepath, os.O_CREATE|os.O_RDWR, 0664)
-		if err != nil {
-			panic(err)
-		}
-		err = syscall.Fallocate(int(f.Fd()), 0, 0, int64(size))
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		f, err = os.OpenFile(filepath, os.O_RDWR, 0664)
-		if err != nil {
-			panic(err)
+	var (
+		file, walfile *os.File
+		// waldata       []byte
+		err error
+	)
+
+	_, err = os.Stat(rfile.FilePath)
+	if !os.IsNotExist(err) {
+		return err
+	}
+
+	file, err = os.OpenFile(rfile.FilePath, os.O_CREATE|os.O_RDWR, 0664)
+	if err != nil {
+		return err
+	}
+	err = syscall.Fallocate(int(file.Fd()), 0, 0, int64(size))
+	if err != nil {
+		return err
+	}
+
+	walfile, err = os.OpenFile(rfile.FilePath+walSuffix, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0664)
+	if err != nil {
+		return err
+	}
+
+	basebytes := encodeBaseInfo(md5bytes, size)
+	_, err = walfile.Write(basebytes)
+	if err != nil {
+		panic(err)
+	}
+
+	rfile.Data = avl.New(partRangeCompare)
+	rfile.File = file
+	rfile.MD5 = md5bytes
+	rfile.Size = size
+	rfile.Wal = walfile
+
+	//
+	return nil
+}
+
+// WalExists 判断 Wal(*.rf) 是否存在
+func (rfile *ResumeFile) WalExists() bool {
+	_, err := os.Stat(rfile.FilePath + walSuffix)
+	return !os.IsNotExist(err)
+}
+
+// Resume 从Wal日志里恢复(*.rf)
+func (rfile *ResumeFile) Resume() error {
+
+	var (
+		err     error
+		waldata []byte
+		file    *os.File
+		walfile *os.File
+	)
+
+	// resume data from wals
+	waldata, err = ioutil.ReadFile(rfile.FilePath + walSuffix)
+	if err != nil {
+		return err
+	}
+	rfile.MD5, rfile.Size = decodeBaseInfo(waldata)
+	wals, err := NewWalsDecode(waldata[24:])
+	if err != nil {
+		return err
+	}
+	rfile.Data.Clear()
+	for _, wal := range wals {
+		key := &wal.Key
+		switch wal.Op {
+		case WAL_PUT:
+			rfile.Data.Put(key, key)
+		case WAL_REMOVE:
+			rfile.Data.Remove(key)
 		}
 	}
 
-	//
+	// 恢复后打开 wal文件
+	walfile, err = os.OpenFile(rfile.FilePath+walSuffix, os.O_WRONLY|os.O_APPEND, 0664)
+	if err != nil {
+		return err
+	}
 
-	return &ResumeFile{File: f, Size: size, Data: avl.New(partRangeCompare), FilePath: filepath}
+	// 恢复后打开 file文件
+	file, err = os.OpenFile(rfile.FilePath, os.O_RDWR, 0664)
+	if err != nil {
+		return err
+	}
+
+	rfile.Wal = walfile
+	rfile.File = file
+
+	return nil
 }
 
 // Put 把分块数据填充文件
@@ -114,13 +199,32 @@ func (rfile *ResumeFile) Put(pr PartRange, data []byte) (State, error) {
 	// 循环合并 数据块, 使块可以通过tree快速检索.
 	for {
 		if p, ok := rfile.Data.Remove(ppr); ok {
+			_, err = rfile.Wal.Write(WalEncode(WAL_REMOVE, ppr))
+			if err != nil {
+				return StateErrorWal, err
+			}
+			err = rfile.Wal.Sync()
+			if err != nil {
+				return StateErrorWal, err
+			}
+
 			pdOld := p.(*PartRange)
 			ppr.Merge(pdOld)
 			if state != StateMegre {
 				state = StateMegre
 			}
 		} else {
-			rfile.Data.Set(ppr, ppr)
+			if !rfile.Data.Put(ppr, ppr) {
+				log.Panic("Put error")
+			}
+			_, err = rfile.Wal.Write(WalEncode(WAL_PUT, ppr))
+			if err != nil {
+				return StateErrorWal, err
+			}
+			err = rfile.Wal.Sync()
+			if err != nil {
+				return StateErrorWal, err
+			}
 			break
 		}
 	}
@@ -151,12 +255,8 @@ func (rfile *ResumeFile) Close() error {
 
 // Remove 关闭rfile相关文件, 移除文件
 func (rfile *ResumeFile) Remove() error {
-	var err error
-	err = rfile.Close()
-	if err != nil {
-		return err
-	}
-	err = os.Remove(rfile.FilePath)
+	defer RemoveResumeFile(rfile.FilePath)
+	var err = rfile.Close()
 	if err != nil {
 		return err
 	}
@@ -164,9 +264,9 @@ func (rfile *ResumeFile) Remove() error {
 }
 
 // SetVaildMD5 设置需要校验的md5
-func (rfile *ResumeFile) SetVaildMD5(md5data []byte) {
-	rfile.MD5 = md5data
-}
+// func (rfile *ResumeFile) SetVaildMD5(md5data []byte) {
+// 	rfile.MD5 = md5data
+// }
 
 // GetVaildMD5 获取设置需要校验的md5
 func (rfile *ResumeFile) GetVaildMD5() []byte {

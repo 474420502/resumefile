@@ -54,10 +54,11 @@ func copyFileTo(src string, dst string) error {
 }
 
 func TestCase1(t *testing.T) {
+	tfilemd5 := GetFileMD5Sum("go.mod")
 	var testfile = "./tests/testfile1"
 
 	rand := random.New()
-	os.Remove(testfile)
+	RemoveResumeFile(testfile)
 	tf, err := os.Open("./go.mod")
 	if err != nil {
 		panic(err)
@@ -69,7 +70,9 @@ func TestCase1(t *testing.T) {
 	}
 
 	tfsize := len(tfdata)
-	file := NewResumeFile(testfile, uint64(tfsize))
+	file := NewResumeFile(testfile)
+
+	file.Create(tfilemd5, uint64(tfsize))
 	defer file.Close()
 
 	min := tfsize
@@ -115,13 +118,45 @@ func TestCase1(t *testing.T) {
 		t.Errorf("%x\n%x", file.GetCurrentMD5(), GetFileMD5Sum("./go.mod"))
 	}
 
+	defer func() {
+
+		file := NewResumeFile(testfile)
+		// defer file.Close()
+		if !file.WalExists() {
+			t.Error("wal file is not exist")
+		}
+		err = file.Resume()
+		if err != nil {
+			t.Error(err)
+		}
+		defer file.Close()
+
+		if file.Size != uint64(tfsize) {
+			t.Error(file.Size)
+		}
+
+		if file.Data.Size() != 1 {
+			t.Error("file.Data.Size != 1")
+		}
+
+		file.Data.Traverse(func(k, v interface{}) bool {
+			if k.(*PartRange).End != file.Size {
+				t.Error("PartRange.End != file.Size")
+			}
+			return true
+		})
+
+		log.Println(file.Size, file.Data.Size(), file.Data.Values(), file.GetModTime())
+	}()
+
 }
 
 func TestCase2(t *testing.T) {
+	tfilemd5 := GetFileMD5Sum("go.mod")
 	var testfile = "./tests/testfile2"
 
 	rand := random.New()
-	os.Remove(testfile)
+	RemoveResumeFile(testfile)
 	tf, err := os.Open("./go.mod")
 	if err != nil {
 		panic(err)
@@ -132,11 +167,20 @@ func TestCase2(t *testing.T) {
 	}
 
 	tfsize := len(tfdata)
-	file := NewResumeFile(testfile, uint64(tfsize))
-	defer file.Close()
+	var file *ResumeFile
 
 	var end = 0
 	for start := 0; ; start = end {
+
+		file = NewResumeFile(testfile)
+		if file.WalExists() {
+			err = file.Resume()
+			if err != nil {
+				t.Error(err)
+			}
+		} else {
+			file.Create(tfilemd5, uint64(tfsize))
+		}
 
 		end = start + rand.Intn(tfsize/3)
 		if end > tfsize {
@@ -152,6 +196,10 @@ func TestCase2(t *testing.T) {
 		if s == StateCompleted {
 			break
 		}
+		err = file.Close()
+		if err != nil {
+			t.Error(err)
+		}
 		time.Sleep(time.Millisecond * 10)
 	}
 
@@ -159,40 +207,33 @@ func TestCase2(t *testing.T) {
 		t.Error("md5 is not equal")
 	}
 
+	err = file.Remove()
+	if err != nil {
+		t.Error(err)
+	}
+
+	file = NewResumeFile(testfile)
+	if file.WalExists() {
+		t.Error("Remove error")
+	}
 }
 
 func TestCase3(t *testing.T) {
-	var testfile = "./tests/testfile3"
 
-	_, err := os.Stat(testfile)
-	if os.IsNotExist(err) {
-		copyFileTo("go.mod", testfile)
-	}
-
-	tf, err := os.Open("./go.mod")
-	if err != nil {
-		panic(err)
-	}
-	tfdata, err := ioutil.ReadAll(tf)
-	if err != nil {
-		panic(err)
-	}
-
-	rfile := NewResumeFile(testfile, uint64(len(tfdata)))
-
-	if !bytes.Equal(rfile.GetCurrentMD5(), GetFileMD5Sum("./go.mod")) {
-		t.Error("md5 is not equal")
-	}
-
-	log.Println(rfile.GetModTime())
 }
 
 func TestCaseLacking(t *testing.T) {
+	tfilemd5 := GetFileMD5Sum("go.mod")
 	var testfile = "./tests/testfile_lacking"
+	RemoveResumeFile(testfile)
+
 	tfdata := getTestFileData()
 	tfsize := len(tfdata)
 
-	file := NewResumeFile(testfile, uint64(tfsize))
+	file := NewResumeFile(testfile)
+	file.Create(tfilemd5, uint64(tfsize))
+	defer file.Close()
+
 	if len(file.GetLacking()) != 1 {
 		panic("")
 	}
@@ -215,10 +256,11 @@ func TestCaseLacking(t *testing.T) {
 }
 
 func TestCase4(t *testing.T) {
+	tfilemd5 := GetFileMD5Sum("go.mod")
 	var testfile = "./tests/testfile4"
 
 	rand := random.New()
-	os.Remove(testfile)
+	RemoveResumeFile(testfile)
 
 	tf, err := os.Open("./go.mod")
 	if err != nil {
@@ -230,9 +272,10 @@ func TestCase4(t *testing.T) {
 	}
 
 	tfsize := len(tfdata)
-	file := NewResumeFile(testfile, uint64(tfsize))
+	file := NewResumeFile(testfile)
+
+	file.Create(tfilemd5, uint64(tfsize))
 	defer file.Close()
-	file.SetVaildMD5(GetFileMD5Sum("go.mod"))
 
 	var start, end int
 	for {
