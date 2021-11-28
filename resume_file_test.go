@@ -102,7 +102,7 @@ func TestCase1(t *testing.T) {
 		}
 		// log.Println(start, end)
 
-		s, err := file.Put(PartRange{Start: uint64(start), End: uint64(end)}, tfdata[start:end])
+		s, err := file.Write(PartRange{Start: uint64(start), End: uint64(end)}, tfdata[start:end])
 		if err != nil {
 			t.Error(err)
 		}
@@ -188,7 +188,7 @@ func TestCase2(t *testing.T) {
 		}
 
 		// log.Println(start, end)
-		s, err := file.Put(PartRange{Start: uint64(start), End: uint64(end)}, tfdata[start:end])
+		s, err := file.Write(PartRange{Start: uint64(start), End: uint64(end)}, tfdata[start:end])
 		if err != nil {
 			t.Error(err)
 		}
@@ -230,8 +230,11 @@ func TestCaseLacking(t *testing.T) {
 	tfdata := getTestFileData()
 	tfsize := len(tfdata)
 
-	file := NewResumeFile(testfile)
-	file.Create(tfilemd5, uint64(tfsize))
+	// file := NewResumeFile(testfile)
+	// file.Create(tfilemd5, uint64(tfsize))
+
+	file := MustNewResumeFile(testfile, tfilemd5, uint64(tfsize))
+
 	defer file.Close()
 
 	if len(file.GetLacking()) != 1 {
@@ -241,7 +244,7 @@ func TestCaseLacking(t *testing.T) {
 		panic("")
 	}
 
-	s, err := file.Put(PartRange{Start: 0, End: uint64(tfsize)}, tfdata)
+	s, err := file.Write(PartRange{Start: 0, End: uint64(tfsize)}, tfdata)
 	if err != nil {
 		panic("")
 	}
@@ -290,7 +293,7 @@ func TestCase4(t *testing.T) {
 		}
 		// log.Println(start, end)
 
-		_, err := file.Put(PartRange{Start: uint64(start), End: uint64(end)}, tfdata[start:end])
+		_, err := file.Write(PartRange{Start: uint64(start), End: uint64(end)}, tfdata[start:end])
 		if err != nil {
 			t.Error(err)
 		}
@@ -303,7 +306,7 @@ func TestCase4(t *testing.T) {
 
 	// log.Println(file.Data.Values())
 	for _, pr := range file.GetLacking() {
-		_, err := file.Put(pr, tfdata[pr.Start:pr.End])
+		_, err := file.Write(pr, tfdata[pr.Start:pr.End])
 		if err != nil {
 			t.Error(err)
 		}

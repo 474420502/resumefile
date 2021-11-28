@@ -71,6 +71,20 @@ func NewResumeFile(filepath string) *ResumeFile {
 	}
 }
 
+func MustNewResumeFile(filepath string, md5bytes []byte, size uint64) *ResumeFile {
+	rfile := NewResumeFile(filepath)
+	if rfile.WalExists() {
+		if err := rfile.Resume(); err != nil {
+			panic(err)
+		}
+	} else {
+		if err := rfile.Create(md5bytes, size); err != nil {
+			panic(err)
+		}
+	}
+	return rfile
+}
+
 // Create 创建ResumeFile文件
 func (rfile *ResumeFile) Create(md5bytes []byte, size uint64) error {
 	if size == 0 {
@@ -173,8 +187,12 @@ func (rfile *ResumeFile) Resume() error {
 	return nil
 }
 
-// Put 把分块数据填充文件
-func (rfile *ResumeFile) Put(pr PartRange, data []byte) (State, error) {
+func (rfile *ResumeFile) SetLackingLimit(ll int) {
+	rfile.LackingLimit = ll
+}
+
+// Write 把分块数据填充文件
+func (rfile *ResumeFile) Write(pr PartRange, data []byte) (State, error) {
 	ppr := &pr
 	var state State = StateInsert
 	if ppr.End > rfile.Size { // 超过最大值, 返回错误
