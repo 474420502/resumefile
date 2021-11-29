@@ -268,10 +268,23 @@ func (rfile *ResumeFile) Write(pr PartRange, data []byte) (State, error) {
 // Close 关闭 rfile相关文件
 func (rfile *ResumeFile) Close() error {
 	rfile.Data = nil
+	err := rfile.Wal.Close()
+	if err != nil {
+		return err
+	}
 	return rfile.File.Close()
 }
 
-// Remove 关闭rfile相关文件, 移除文件
+// Complete 完成完整文件, 删除*.rf文件信息
+func (rfile *ResumeFile) Complete() error {
+	err := rfile.Close()
+	if err != nil {
+		return err
+	}
+	return os.Remove(rfile.FilePath + ".rf")
+}
+
+// Remove 关闭rfile相关文件, 移除所有文件
 func (rfile *ResumeFile) Remove() error {
 	defer RemoveResumeFile(rfile.FilePath)
 	var err = rfile.Close()
