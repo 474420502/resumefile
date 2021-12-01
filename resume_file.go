@@ -25,6 +25,7 @@ const (
 	StateErrorOutOfSize State = -1  // 插入错误,超出文件最大范围
 	StateCompleted      State = 0   // 完成
 	StateIncompleted    State = 100 // 未完成
+	StateClosed         State = 101 // 未完成
 	StateMegre          State = 1   // 插入数据与前数据合并
 	StateInsert         State = 2   // 插入数据并没有与其他块数据交接
 )
@@ -43,6 +44,8 @@ func (s State) String() string {
 		return "StateErrorSeek"
 	case StateErrorOutOfSize:
 		return "StateErrorOutOfSize"
+	case StateClosed:
+		return "StateClosed"
 	case StateIncompleted:
 		return "StateIncompleted"
 	case StateCompleted:
@@ -281,6 +284,11 @@ func (rfile *ResumeFile) Close() error {
 // GetCurrentState StateIncompleted StateCompleted StateErrorMD5
 func (rfile *ResumeFile) GetCurrentState() State {
 	var state State = StateIncompleted
+
+	if rfile.Data == nil {
+		return StateClosed
+	}
+
 	if rfile.Data.Size() == 1 {
 		var ppr *PartRange // ppr必然不会nil
 		rfile.Data.Traverse(func(k, v interface{}) bool {
