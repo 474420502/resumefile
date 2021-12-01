@@ -17,15 +17,16 @@ import (
 type State int
 
 const (
-	StateErrorWal       State = -6 // Wal写入错误
-	StateErrorMD5       State = -5 // MD5校验错误
-	StateErrorFileSync  State = -4 // 文件同步写入错误
-	StateErrorFileWrite State = -3 // 文件写入错误
-	StateErrorSeek      State = -2 // Seek错误
-	StateErrorOutOfSize State = -1 // 插入错误,超出文件最大范围
-	StateCompleted      State = 0  // 完成
-	StateMegre          State = 1  // 插入数据与前数据合并
-	StateInsert         State = 2  // 插入数据并没有与其他块数据交接
+	StateErrorWal       State = -6  // Wal写入错误
+	StateErrorMD5       State = -5  // MD5校验错误
+	StateErrorFileSync  State = -4  // 文件同步写入错误
+	StateErrorFileWrite State = -3  // 文件写入错误
+	StateErrorSeek      State = -2  // Seek错误
+	StateErrorOutOfSize State = -1  // 插入错误,超出文件最大范围
+	StateCompleted      State = 0   // 完成
+	StateIncompleted    State = 100 // 未完成
+	StateMegre          State = 1   // 插入数据与前数据合并
+	StateInsert         State = 2   // 插入数据并没有与其他块数据交接
 )
 
 func (s State) String() string {
@@ -42,6 +43,8 @@ func (s State) String() string {
 		return "StateErrorSeek"
 	case StateErrorOutOfSize:
 		return "StateErrorOutOfSize"
+	case StateIncompleted:
+		return "StateIncompleted"
 	case StateCompleted:
 		return "StateCompleted"
 	case StateMegre:
@@ -273,6 +276,27 @@ func (rfile *ResumeFile) Close() error {
 		return err
 	}
 	return rfile.File.Close()
+}
+
+// GetCurrentState StateIncompleted StateCompleted StateErrorMD5
+func (rfile *ResumeFile) GetCurrentState() State {
+	var state State = StateIncompleted
+	if rfile.Data.Size() == 1 {
+		var ppr *PartRange // ppr必然不会nil
+		rfile.Data.Traverse(func(k, v interface{}) bool {
+			ppr = v.(*PartRange)
+			return false
+		})
+		if ppr.End-ppr.Start == rfile.Size {
+			if len(rfile.MD5) != 0 {
+				if !rfile.VaildMD5() {
+					return StateErrorMD5
+				}
+			}
+			state = StateCompleted
+		}
+	}
+	return state
 }
 
 // Complete 完成完整文件, 删除*.rf文件信息

@@ -207,6 +207,10 @@ func TestCase2(t *testing.T) {
 		t.Error("md5 is not equal")
 	}
 
+	if file.GetCurrentState() != StateCompleted {
+		t.Error("State error")
+	}
+
 	err = file.Remove()
 	if err != nil {
 		t.Error(err)
